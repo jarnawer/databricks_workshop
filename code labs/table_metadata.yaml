@@ -1,0 +1,66 @@
+tables:
+  - table_name: circuits
+    file_name: circuits.csv
+    primary_key: 
+      - circuitId
+  - table_name: constructor_results
+    file_name: constructor_results.csv
+    primary_key: 
+      - constructorResultsId
+  - table_name: constructor_standings
+    file_name: constructor_standings.csv
+    primary_key: 
+      - constructorStandingsId
+  - table_name: constructors
+    file_name: constructors.csv
+    primary_key: 
+      - constructorId
+  - table_name: driver_standings
+    file_name: driver_standings.csv
+    primary_key: 
+      - driverStandingsId
+  - table_name: drivers
+    file_name: drivers.csv
+    primary_key: 
+      - driverId
+  - table_name: lap_times
+    file_name: lap_times.csv
+    primary_key: 
+      - raceId
+      - driverId
+      - lap
+  - table_name: pit_stops
+    file_name: pit_stops.csv
+    primary_key: 
+      - raceId
+      - driverId 
+      - stop
+      - lap
+  - table_name: qualifying
+    file_name: qualifying.csv
+    primary_key: 
+      - qualifyId
+      - raceId
+      - driverId
+      - constructorId
+  - table_name: races
+    file_name: races.csv
+    primary_key: 
+      - raceId
+  - table_name: results
+    file_name: results.csv
+    primary_key: 
+      - resultId
+  - table_name: seasons
+    file_name: seasons.csv
+    primary_key: 
+      - year
+  - table_name: sprint_results
+    file_name: sprint_results.csv
+    primary_key: 
+      - resultId
+  - table_name: status
+    file_name: status.csv
+    primary_key: 
+      - statusId
+  
