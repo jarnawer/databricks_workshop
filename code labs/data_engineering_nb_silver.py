@@ -20,7 +20,7 @@ from pyspark.sql import functions as F
 from delta.tables import DeltaTable
 from typing import List
 
-spark_session = SparkSession.builder.appName("bronze_pipeline").getOrCreate()
+spark_session = SparkSession.builder.appName("silver_pipeline").getOrCreate()
 
 SOURCE_SCHEMA="bronze"
 SCHEMA="silver"
@@ -66,7 +66,7 @@ def transform_data(df:DataFrame):
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ### Leemos los datos en CSV desde la ruta de origen usando el fichero de metadatos
+# MAGIC ### Leemos el fichero de metadatos
 # MAGIC
 
 # COMMAND ----------
@@ -111,5 +111,5 @@ for table in metadata["tables"]:
 # MAGIC SELECT ingestion_timestamp, processed_timestamp, circuitId, name, location, country FROM silver.circuits
 
 # COMMAND ----------
-drivers = spark_session.read.format("delta").table("silver.drivers").select("driverId", "driverRef", "number","code","forename","processed_timestamp", "inestion_timestamp")
+drivers = spark_session.read.format("delta").table("silver.drivers").select("driverId", "driverRef", "number","code","forename","processed_timestamp", "ingestion_timestamp")
 display(drivers)

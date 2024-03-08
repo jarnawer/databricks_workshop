@@ -1,17 +1,18 @@
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## Ingesta de datos desde la capa Bronze a la capa Silver
+# MAGIC ## Ingesta de datos desde la capa Silver a la capa Gold
 # MAGIC
-# MAGIC Ingestaremos los datos de la capa Bronze a la capa Silver.
-# MAGIC Seguiremos usando el fichero de metadatos que utilizamos en el ejercicio anterior
+# MAGIC Vamos a generar ahora 2 tablas en la capa Gold, generando una serie de agregados y calculos sobre los datos de la capa Silver.
+# MAGIC Los guardaremos para posteriomente consultarlos con SQL y generar visualizaciones. Las agregaciones seran las siguientes:
+# MAGIC - **most_awarded_drivers**: Tabla con los pilotos que han ganado mas carreras
+# MAGIC - **most_pole_position_drivers**: Tabla con los pilotos que han conseguido mas pole positions
 # MAGIC
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ### Definimos a continuacion una serie de funciones que nos permitiran leer el fichero de metadatos y leer y escribir los datos en el formato deseado.
-# MAGIC La logica al leer ficheros y al escribir es distinta, dado que en Silver queremos mantener la version mas actualizada de los datos, 
-# MAGIC por lo que usaremos la operacion `merge` de Delta Lake para actualizar los datos existentes y añadir los nuevos (**UPSERT**).
-# MAGIC
+# MAGIC ### Definimos a continuacion una serie de funciones que nos permitiran leer y escribir los datos en el formato deseado.
+# MAGIC En este caso sobreescribiremos las tablas en caso de que existan, ya que siempre vamos a regenerar los datos.
+
 
 # COMMAND ----------
 import yaml
@@ -20,53 +21,71 @@ from pyspark.sql import functions as F
 from delta.tables import DeltaTable
 from typing import List
 
-spark_session = SparkSession.builder.appName("bronze_pipeline").getOrCreate()
+spark_session = SparkSession.builder.appName("gold_pipeline").getOrCreate()
 SOURCE_PATH = "dbfs:/FileStore/tables/datasets"
-SILVER_PATH = f"{SOURCE_PATH}/f1/silver"
+GOLD_PATH = f"{SOURCE_PATH}/f1/gold"
 
 METADATA_PATH = f"{SOURCE_PATH}/metadata.yml"
 
-SOURCE_SCHEMA="bronze"
-SCHEMA="silver"
+SOURCE_SCHEMA="silver"
+SCHEMA="gold"
 
-def read_yml_file(file_path:str):
-    file_content=dbutils.fs.head(file_path)
-    return yaml.safe_load(file_content)
-    
-def read_table(spark_session:SparkSession, table:str, file_path:str):
+def read_table(spark_session:SparkSession, table:str):
     # cargamos los datos desde el esquema de bronze, seleccionando la fecha de ingesta mas reciente
     return (spark_session.read.format("delta").table(f"{SOURCE_SCHEMA}.{table}"))
     
     
-def write_table(spark_session:SparkSession, df:DataFrame, table:str, table_path:str, schema_name:str, pk_columns:List[str], mode:str="append"):
-    # write a dataframe to a delta table
+def write_table(spark_session:SparkSession, df:DataFrame, table:str, table_path:str, schema_name:str):
     spark_session.sql(f"CREATE DATABASE IF NOT EXISTS {schema_name}")
     
-    deltaTable = (
-            DeltaTable.createIfNotExists(spark_session)
-            .location(table_path)
-            .tableName(f"{schema_name}.{table}")
-            .addColumns(df.schema)
-            .execute()
-    )
-    merge_string = ' AND '.join([f"existing.{col}=incoming.{col}" for col in pk_columns])
-    deltaTable.alias("existing").merge(df.alias("incoming"), merge_string) \
-                                .whenMatchedUpdateAll() \
-                                .whenNotMatchedInsertAll() \
-                                .execute()
+    # sobreescribimos la tabla en caso de que exista, siempre vamos a regenerar los datos
+    (df.write.format("delta")
+     .option("path", table_path)
+     .mode("overwrite")
+     .saveAsTable(f"{schema_name}.{table}"))
                                 
-def transform_data(df:DataFrame):
-    return df.withColumn("processed_timestamp", F.current_timestamp())
-
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ### Leemos los datos en CSV desde la ruta de origen usando el fichero de metadatos
+# MAGIC ### Definimos la tabla **most_awarded_drivers** que contendra los pilotos que han ganado mas carreras
 # MAGIC
 
 # COMMAND ----------
-metadata = read_yml_file(METADATA_PATH)
-print("Metadata file loaded!")
-print(metadata)
+def generate_most_awarded_drivers():
+
+    drivers_df = read_table(spark_session,"drivers")
+    results_df = read_table(spark_session,"results")
+    filtered_results = results_df.filter(F.col("position") == 1)    
+    joined_df = drivers_df.join(filtered_results, drivers_df.driverId == results_df.driverId)
+
+    
+    grouped_df = joined_df.groupBy(drivers_df.driverId, drivers_df.driverRef, drivers_df.code, drivers_df.forename, drivers_df.surname) \
+                        .agg(F.count(drivers_df.driverId).alias("total_wins"))
+
+    final_df = grouped_df.withColumn("driver_name", F.concat(F.col("forename"), F.lit(" "), F.col("surname")))
+
+    return final_df.select("driverId", "driverRef", "code", "driver_name", "total_wins")
+
+# COMMAND ----------
+def generate_most_pole_position_drivers():
+    drivers_df = read_table(spark_session,"drivers")
+    qualifying_df = read_table(spark_session,"qualifying")
+
+    # Filter for position = 1 in qualifying results
+    filtered_qualifying = qualifying_df.filter(F.col("position") == 1)
+
+    # Join the filtered qualifying DataFrame with the drivers DataFrame
+    joined_df = drivers_df.join(filtered_qualifying, "driverId")
+
+    # Group by the necessary driver fields
+    grouped_df = joined_df.groupBy(drivers_df.driverId, drivers_df.forename, drivers_df.surname) \
+                        .agg(F.count("*").alias("total_pole_positions"))
+
+    # Create the driver_name column
+    final_df = grouped_df.withColumn("driver_name", F.concat(F.col("forename"), F.lit(" "), F.col("surname")))
+
+    # Select the desired columns
+    return final_df.select("driver_name", "total_pole_positions")
+
 
 # COMMAND ----------
 # MAGIC %md
@@ -77,18 +96,8 @@ print(metadata)
 # MAGIC
 
 # COMMAND ----------
-for table in metadata["tables"]:
-    table_name = table["table_name"]
-    file_name = table["file_name"]
-    primary_key = table["primary_key"]
-    
-    print(f"Reading {file_name} into {table_name}...")
-    df = read_table(spark_session, table_name, f"{SOURCE_PATH}/{file_name}")
-    
-    print(f"Applying transformation logic to {table_name}...")
-    transformed_df = transform_data(df)
-    
-    row_count = transformed_df.count()
-    
-    print(f"Writing {row_count} rows to Delta Table {SCHEMA}.{table_name}...")
-    write_table(spark_session, transformed_df, table_name, f"{SILVER_PATH}/{table_name}", SCHEMA)
+most_awarded_drivers_df = generate_most_awarded_drivers()
+write_table(spark_session, most_awarded_drivers_df, "most_awarded_drivers", f"{GOLD_PATH}/most_awarded_drivers", SCHEMA)
+
+most_pole_position_drivers_df = generate_most_pole_position_drivers()
+write_table(spark_session, most_pole_position_drivers_df, "most_pole_position_drivers", f"{GOLD_PATH}/most_pole_position_drivers", SCHEMA)
